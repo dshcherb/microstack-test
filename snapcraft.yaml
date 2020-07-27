@@ -1,0 +1,137 @@
+name: microstack-test
+version: "1"
+summary: Rally, tempest and test definitions to test MicroStack.
+description: |
+  A snap for running tests on MicroStack using Rally, the tempest verifier and tests from RefStack.
+# core20 usage will only be possible after the libc-shim will be ported to core20.
+base: core18
+grade: stable
+# classic confinement is used as rally uses the 'multiprocessing' python module
+# which uses  shared memory and accesses paths blocked via AppArmor policies of
+# snapd which leads to segfaults when any of the rally tools are used
+# see https://bugs.launchpad.net/snapcraft/+bug/1577514
+# https://forum.snapcraft.io/t/python-multiprocessing-sem-open-blocked-in-strict-mode/962
+confinement: strict
+
+environment:
+  PATH: $SNAP/bin:$SNAP/usr/bin:$PATH
+  PYTHONPATH: $SNAP/lib/python3.8/site-packages:$SNAP/bin/rally
+  # see
+  # https://github.com/GoogleCloudPlatform/google-auth-library-python/issues/249
+  # https://github.com/ubuntu/ubuntu-make/issues/536#issuecomment-382112564
+  # https://www.python.org/dev/peps/pep-0420/
+  PYTHONHOME: $SNAP/usr
+  SNAP_SHM_PREFIX: "snap.${SNAP_NAME}."
+apps:
+  rally:
+    command: bin/rally
+    plugs: [home, network, network-bind]
+  rally-init:
+    command: bin/rally-init.sh
+    plugs: [home, network, network-bind] 
+  tempest-init:
+    command: bin/tempest-init.sh
+    plugs: [home, network, network-bind]
+
+parts:
+  patches:
+    source: patches
+    plugin: dump
+    prime:
+      - -*
+  rally-openstack:
+    after: [patches]
+    plugin: python
+    build-packages: [python3, python3-pip, build-essential, libffi-dev, libpq-dev, libssl-dev, libxml2-dev, libxslt1-dev, python3-dev, iputils-ping, zlib1g, libcomerr2, libgcc1]
+    source: https://github.com/openstack/rally-openstack
+    source-type: git
+    source-tag: '2.0.0'
+    requirements: [requirements.txt]
+    constraints: [upper-constraints.txt]
+    stage-packages:
+      # note(dmitriis) in order to avoid conflicts about lib64/ld-linux-x86-64.so.2
+      # with other parts.
+      - libc6
+      - git # rally-openstack clones a tempest repository during its operation.
+    filesets:
+      exclude-conflicting-files:
+        - -lib/x86_64-linux-gnu/libpthread-2.27.so
+        - -lib/x86_64-linux-gnu/libpthread.so.0
+      include-all:
+        - ./*
+    stage:
+      - $include-all
+      - $exclude-conflicting-files
+  tempest:
+    after: [rally-openstack, patches]
+    plugin: python
+    source: https://opendev.org/openstack/tempest
+    source-type: git
+    source-tag: '24.0.0'
+    requirements: [requirements.txt]
+    stage-packages:
+      # note(dmitriis) in order to avoid conflicts about lib64/ld-linux-x86-64.so.2
+      # with other parts.
+      - libc6
+    filesets:
+      exclude-conflicting-files:
+        - -lib/x86_64-linux-gnu/libpthread-2.27.so
+        - -lib/x86_64-linux-gnu/libpthread.so.0
+        - -lib/python3.6/site-packages/importlib_metadata
+        - -lib/python3.6/site-packages/importlib_resources
+        - -lib/python3.6/site-packages/importlib_resources-3.0.0.dist-info
+      include-all:
+        - ./*
+    stage:
+      - $include-all
+      - $exclude-conflicting-files
+    override-pull: |
+      snapcraftctl pull
+      git config user.email "builder@snapcraft.io"
+      git config user.name "builder@snapcraft.io"
+      git am $SNAPCRAFT_STAGE/0001-Make-create_user-domain-aware-for-V3CredsClient.patch
+  tempest-dump:
+    after: [tempest, patches]
+    plugin: dump
+    source: https://github.com/openstack/tempest
+    source-type: git
+    # take a specific tempest version
+    source-tag: '24.0.0'
+    # do nothing as we override the prime step
+    # and do not need to stage or build anything
+    override-pull: |
+      snapcraftctl pull
+      git config user.email "builder@snapcraft.io"
+      git config user.name "builder@snapcraft.io"
+      git am $SNAPCRAFT_STAGE/0001-Make-create_user-domain-aware-for-V3CredsClient.patch
+      git tag 19.0.0-patched-for-lp1613819
+    override-stage: |
+            :
+    override-build: |
+            :
+    # rally expects tempest source with .git present
+    # which means we have to clone the repo into the
+    # target directory, including the hidden dir
+    override-prime: |
+      rm -fr $SNAPCRAFT_PRIME/tempest
+      git clone $SNAPCRAFT_PART_SRC $SNAPCRAFT_PRIME/tempest
+  copy-parts:
+    after: [tempest-dump]
+    plugin: dump
+    source: ./
+    organize:
+            rally-init.sh: bin/rally-init.sh
+            tempest-init.sh: bin/tempest-init.sh
+    stage:
+            - bin/*
+            - 2018.02-test-list.txt
+  libc-shm-shim:
+      plugin: nil
+      override-build: |
+          snap download libc-shm-shim --beta
+          unsquashfs -f -d ${SNAPCRAFT_PART_INSTALL} libc-shm-shim_*.snap
+      build-packages:
+          - squashfs-tools
+      stage:
+          - -meta
+          - -snap

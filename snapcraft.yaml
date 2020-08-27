@@ -125,6 +125,7 @@ parts:
     stage:
             - bin/*
             - 2018.02-test-list.txt
+            - 2020.06-test-list.txt
   libc-shm-shim:
       plugin: nil
       override-build: |

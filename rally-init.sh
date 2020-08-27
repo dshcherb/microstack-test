@@ -1,2 +1,4 @@
+#!/bin/sh
+
 rally db recreate
-rally deployment create --fromenv --name snap_generated
+rally deployment create --fromenv --name microstack
